@@ -5,9 +5,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/vvvvjvvvv/jkv/utils/codec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/vvvvjvvvv/jkv/utils/codec"
 )
 
 func RandString(len int) string {

@@ -14,10 +14,8 @@ const (
 )
 
 type SkipList struct {
-	header *Element
-
-	rand *rand.Rand
-
+	header   *Element
+	rand     *rand.Rand
 	maxLevel int
 	length   int
 	lock     sync.RWMutex
