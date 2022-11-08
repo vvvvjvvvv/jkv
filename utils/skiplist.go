@@ -2,11 +2,7 @@ package utils
 
 import (
 	"bytes"
-	"math/rand"
 	"sync"
-	"time"
-
-	"github.com/vvvvjvvvv/jkv/utils/codec"
 )
 
 const (
@@ -14,138 +10,161 @@ const (
 )
 
 type SkipList struct {
-	header   *Element
-	rand     *rand.Rand
-	maxLevel int
-	length   int
-	lock     sync.RWMutex
-	size     int64
+	maxLevel   int          // sl的最大高度
+	lock       sync.RWMutex // 读写锁，用来实现并发安全的sl
+	currHeight int32        // sl当钱最大高度
+	headOffset uint32       // 头节点在arena中的位置
+	arena      *Arena
 }
 
-func NewSkipList() *SkipList {
-	source := rand.NewSource(time.Now().UnixNano())
+func NewSkipList(arenaSize int64) *SkipList {
+	arena := newArena(arenaSize)
+	// 引入一个空的头节点，因此key和value都是空的
+	head := newElement(arena, nil, ValueStruct{}, defaultMaxLevel)
+	ho := arena.getElementOffset(head)
 
 	return &SkipList{
-		header: &Element{
-			levels: make([]*Element, defaultMaxLevel),
-			entry:  nil,
-			score:  0,
-		},
-		rand:     rand.New(source),
-		length:   0,
-		maxLevel: defaultMaxLevel,
+		currHeight: 1,
+		headOffset: ho,
+		arena:      arena,
 	}
 }
 
 type Element struct {
-	levels []*Element
-	entry  *codec.Entry
-	score  float64
+	score     float64 // 加快查找，只在内存中生效，因此不需要持久化
+	value     uint64  // 将value的off和size组装成一个uint64，实现原子化的操作
+	keyOffset uint32
+	keySize   uint16
+	height    uint16
+	levels    [defaultMaxLevel]uint32 // 这里先按最大高度申明，往arena中放置的时候，会计算实际高度和内存消耗
 }
 
-func newElement(score float64, entry *codec.Entry, level int) *Element {
-	return &Element{
-		levels: make([]*Element, level),
-		entry:  entry,
-		score:  score,
-	}
+func encodeValue(valOffset uint32, valSize uint32) uint64 {
+	return uint64(valSize)<<32 | uint64(valOffset)
 }
 
-func (elem *Element) Entry() *codec.Entry {
-	return elem.entry
+func decodeValue(value uint64) (valOffset, valSize uint32) {
+	valOffset = uint32(value)
+	valSize = uint32(value >> 32)
+	return
 }
 
-func (list *SkipList) Add(data *codec.Entry) error {
+func newElement(arena *Arena, key []byte, v ValueStruct, height int) *Element {
+	nodeOffset := arena.putNode(height)
+	keyOffset := arena.putKey(key)
+	val := encodeValue(arena.putVal(v), v.EncodedSize())
+	elem := arena.getElement(nodeOffset)
+	elem.score = calcScore(key)
+	elem.keyOffset = keyOffset
+	elem.keySize = uint16(len(key))
+	elem.height = uint16(height)
+	elem.value = val
+
+	return elem
+}
+
+func (e *Element) key(arena *Arena) []byte {
+	return arena.getKey(e.keyOffset, e.keySize)
+}
+
+func (list *SkipList) Size() int64 {
+	return list.arena.Size()
+}
+
+func (list *SkipList) Add(data *Entry) error {
 	list.lock.Lock()
 	defer list.lock.Unlock()
-	score := list.calcScore(data.Key)
+	score := calcScore(data.Key)
 	var elem *Element
+	value := ValueStruct{
+		Value: data.Value,
+	}
 
-	prevElem := list.header
-
+	// 从当前最大高度开始
+	max := list.currHeight
+	// 拿到头节点，从第一个开始
+	prevElem := list.arena.getElement(list.headOffset)
+	// 用来记录访问路径
 	var prevElemHeaders [defaultMaxLevel]*Element
 
-	for i := len(list.header.levels) - 1; i >= 0; {
-
-		// 用于记录当前元素在每一层中插入位置的前一个元素，默认是header
+	for i := max - 1; i >= 0; {
 		prevElemHeaders[i] = prevElem
 
-		for next := prevElem.levels[i]; next != nil; next = prevElem.levels[i] {
+		for next := list.getNext(prevElem, int(i)); next != nil; next = list.getNext(prevElem, int(i)) {
 			if comp := list.compare(score, data.Key, next); comp <= 0 {
-				if comp == 0 { // key相同，直接覆盖掉val
-					elem = next
-					elem.entry = data
-					list.size += elem.entry.Size() - data.Size()
+				if comp == 0 {
+					vo := list.arena.putVal(value)
+					encV := encodeValue(vo, value.EncodedSize())
+					next.value = encV
 					return nil
 				}
+
 				break
 			}
 			prevElem = next
-			prevElemHeaders[i] = prevElem // 更新
+			prevElemHeaders[i] = prevElem
 		}
 
 		topLevel := prevElem.levels[i]
 
 		for i--; i >= 0 && prevElem.levels[i] == topLevel; i-- {
-			prevElemHeaders[i] = prevElem // 更新跳过的case
+			prevElemHeaders[i] = prevElem
 		}
 	}
 
 	level := list.randLevel()
 
-	elem = newElement(score, data, level)
+	elem = newElement(list.arena, data.Key, ValueStruct{Value: data.Value}, level)
 
+	off := list.arena.getElementOffset(elem)
 	for i := 0; i < level; i++ {
 		elem.levels[i] = prevElemHeaders[i].levels[i]
-		prevElemHeaders[i].levels[i] = elem
+		prevElemHeaders[i].levels[i] = off
 	}
-	list.size += data.Size()
-	list.length++
+
 	return nil
 }
 
-func (list *SkipList) Search(key []byte) (e *codec.Entry) {
-	list.lock.RLock()
-	defer list.lock.RUnlock()
-
-	if list.length == 0 {
+func (list *SkipList) Search(key []byte) (e *Entry) {
+	list.lock.Lock()
+	defer list.lock.Unlock()
+	if list.arena.Size() == 0 {
 		return nil
 	}
 
-	score := list.calcScore(key)
-	prevElem := list.header
+	score := calcScore(key)
 
-	// 从顶层开始遍历
-	for i := len(list.header.levels) - 1; i >= 0; {
-		// 搭配循环体里的 prevElem = next
-		for next := prevElem.levels[i]; next != nil; next = prevElem.levels[i] {
-			// 小于：应该往下一层
-			// 等于：那就是你了
-			// 大于：接着遍历
+	prevElem := list.arena.getElement(list.headOffset)
+	i := list.currHeight
+
+	for i >= 0 {
+		for next := list.getNext(prevElem, int(i)); next != nil; next = list.getNext(prevElem, int(i)) {
 			if comp := list.compare(score, key, next); comp <= 0 {
 				if comp == 0 {
-					return next.Entry()
+					vo, vs := decodeValue(next.value)
+					return &Entry{Key: key, Value: list.arena.getVal(vo, vs).Value}
 				}
 				break
 			}
+
 			prevElem = next
 		}
 
-		// 顶层大于党员元素的元素，为了跳过一些case
 		topLevel := prevElem.levels[i]
+
 		for i--; i >= 0 && prevElem.levels[i] == topLevel; i-- {
 
 		}
 	}
 
-	return nil
+	return
 }
 
 func (list *SkipList) Close() error {
 	return nil
 }
 
-func (list *SkipList) calcScore(key []byte) (score float64) {
+func calcScore(key []byte) (score float64) {
 	var hash uint64
 	l := len(key)
 
@@ -164,7 +183,7 @@ func (list *SkipList) calcScore(key []byte) (score float64) {
 
 func (list *SkipList) compare(score float64, key []byte, next *Element) int {
 	if score == next.score {
-		return bytes.Compare(key, next.entry.Key)
+		return bytes.Compare(key, next.key(list.arena))
 	}
 
 	if score < next.score {
@@ -189,6 +208,49 @@ func (list *SkipList) randLevel() int {
 	return i
 }
 
-func (list *SkipList) Size() int64 {
-	return list.size
+// 拿到某个节点，在某个高度上的next节点
+// 如果该节点已经是最后一个节点（该节点的level[height]将会是0，会返回nil
+func (list *SkipList) getNext(e *Element, height int) *Element {
+	return list.arena.getElement(e.getNextOffset(height))
+}
+
+type SkipListIter struct {
+	list *SkipList
+	elem *Element // iterator当前持有的节点
+	lock sync.RWMutex
+}
+
+func (list *SkipList) NewSkipListIterator() Iterator {
+	return &SkipListIter{}
+}
+
+func (iter *SkipListIter) Next() {
+	AssertTrue(iter.Valid())
+	iter.elem = iter.list.getNext(iter.elem, 0) // 只在最底层遍历
+}
+
+func (iter *SkipListIter) Valid() bool {
+	return iter.elem != nil
+}
+
+func (iter *SkipListIter) Rewind() {
+	head := iter.list.arena.getElement(iter.list.headOffset)
+	iter.elem = iter.list.getNext(head, 0)
+}
+
+func (iter *SkipListIter) Item() Item {
+	vo, vs := decodeValue(iter.elem.value)
+	return &Entry{
+		Key:       iter.list.arena.getKey(iter.elem.keyOffset, iter.elem.keySize),
+		Value:     iter.list.arena.getVal(vo, vs).Value,
+		ExpiresAt: iter.list.arena.getVal(vo, vs).ExpiresAt,
+	}
+}
+
+func (iter *SkipListIter) Close() error {
+	return nil
+}
+
+func (iter *SkipListIter) Seek(key []byte) {
+
 }
