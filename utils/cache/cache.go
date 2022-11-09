@@ -63,6 +63,10 @@ func (c *Cache) Set(key, value interface{}) bool {
 }
 
 func (c *Cache) set(key, value interface{}) bool {
+	if key == nil {
+		return false
+	}
+
 	// keyHash 用来快速定位，conflict 用来判断冲突
 	keyHash, conflictHash := c.keyToHash(key)
 
@@ -89,7 +93,7 @@ func (c *Cache) set(key, value interface{}) bool {
 		return true
 	}
 
-	// 这里进行 PK， 必须在 bloomFilter中出现过一次，才允许 pk
+	// 这里进行 PK， 必须在 bloomFilter 中至少出现过一次，才允许 pk
 	if !c.door.Allow(uint32(eItem.key)) {
 		return true
 	}
