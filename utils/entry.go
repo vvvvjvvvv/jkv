@@ -50,6 +50,7 @@ type Entry struct {
 	Key          []byte
 	Value        []byte
 	ExpiresAt    uint64
+	Meta         byte
 	Version      uint64
 	Offset       uint32
 	Hlen         int // length of the header
@@ -73,7 +74,7 @@ func (e *Entry) WithTTL(dur time.Duration) *Entry {
 }
 
 // EncodedSize is the size of the ValueStruct when encoded
-func (e *Entry) EncodeSize() uint32 {
+func (e *Entry) EncodedSize() uint32 {
 	sz := len(e.Value)
 	enc := sizeVarint(e.ExpiresAt)
 	return uint32(sz + enc)
