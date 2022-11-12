@@ -1,8 +1,6 @@
 package lsm
 
 import (
-	"fmt"
-
 	"github.com/vvvvjvvvv/jkv/utils"
 )
 
@@ -61,7 +59,6 @@ func NewLSM(opt *Options) *LSM {
 	lsm := &LSM{option: opt}
 	// 初始化levelManager
 	lsm.levels = lsm.initLevelManager(opt)
-	fmt.Printf("lsm: %+v\n", lsm)
 	// 启动DB恢复过程加载val，如果没有回复哪痛则创建新的内存表
 	lsm.memTable, lsm.immutables = lsm.recovery()
 	// 初始化closer 用于资源回收的信号控制

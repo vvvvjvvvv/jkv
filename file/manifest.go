@@ -65,9 +65,7 @@ func OpenManifestFile(opt *Options) (*ManifestFile, error) {
 		}
 
 		m := createManifest()
-		fmt.Printf("m:%v\n", m)
 		fp, netCreations, err := helpRewrite(opt.Dir, m)
-		fmt.Printf("fp: %+v, netCreations: %+v,  err: %+v\n", fp, netCreations, err)
 		utils.CondPanic(netCreations == 0, errors.Wrapf(err, utils.ErrRewriteFailure.Error()))
 		if err != nil {
 			return mf, err
@@ -253,7 +251,6 @@ func helpRewrite(dir string, m *Manifest) (*os.File, int, error) {
 	// We explicitly sync.
 	fp, err := os.OpenFile(rewritePath, utils.DefaultFileFlag, utils.DefaultFileMode)
 	if err != nil {
-		fmt.Printf("")
 		return nil, 0, err
 	}
 
@@ -263,7 +260,6 @@ func helpRewrite(dir string, m *Manifest) (*os.File, int, error) {
 
 	netCreations := len(m.Tables)
 	changes := m.asChanges()
-	fmt.Printf("changes: %+v\n", changes)
 	set := pb.ManifestChangeSet{Changes: changes}
 
 	changeBuf, err := set.Marshal()
@@ -303,7 +299,6 @@ func helpRewrite(dir string, m *Manifest) (*os.File, int, error) {
 	}
 	if err := utils.SyncDir(dir); err != nil {
 		fp.Close()
-		fmt.Printf("syncDirErr: %+v\n", err)
 		return nil, 0, err
 	}
 

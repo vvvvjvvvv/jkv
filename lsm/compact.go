@@ -324,25 +324,22 @@ func (lm *levelManager) fillTables(cd *compactDef) bool {
 	if len(tables) == 0 {
 		return false
 	}
-
 	// We're doing a maxLevel to maxLevel compaction. Pick tables based on the stale data size.
 	if cd.thisLevel.isLastLevel() {
 		return lm.fillMaxLevelTables(tables, cd)
 	}
 	// We pick tables, so we compact older tables first. This is similar to
-	// kOldestLargestSeqFirst in RocksDB
+	// kOldestLargestSeqFirst in RocksDB.
 	lm.sortByHeuristic(tables, cd)
 
 	for _, t := range tables {
 		cd.thisSize = t.Size()
-		cd.thisRange = getKeyRange()
-
+		cd.thisRange = getKeyRange(t)
 		// 如果被压缩过了，则什么都不需要做
 		if lm.compactState.overlapsWith(cd.thisLevel.levelNum, cd.thisRange) {
 			continue
 		}
-
-		cd.top = []*table{}
+		cd.top = []*table{t}
 		left, right := cd.nextLevel.overlappingTables(levelHandlerRLocked{}, cd.thisRange)
 
 		cd.bot = make([]*table, right-left)
@@ -366,7 +363,6 @@ func (lm *levelManager) fillTables(cd *compactDef) bool {
 		}
 		return true
 	}
-
 	return false
 }
 
@@ -407,12 +403,12 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 		return err
 	}
 	defer func() {
+		// Only assign to err, if it's not already nil.
 		if decErr := decr(); err == nil {
 			err = decErr
 		}
 	}()
 	changeSet := buildChangeSet(&cd, newTables)
-
 	// 删除之前先更新manifest文件
 	if err := lm.manifestFile.AddChanges(changeSet.Changes); err != nil {
 		return err
@@ -426,8 +422,8 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 		return err
 	}
 
-	from := append(tableToString(cd.top), tableToString(cd.bot)...)
-	to := tableToString(newTables)
+	from := append(tablesToString(cd.top), tablesToString(cd.bot)...)
+	to := tablesToString(newTables)
 	if dur := time.Since(timeStart); dur > 2*time.Second {
 		var expensive string
 		if dur > time.Second {
@@ -439,12 +435,11 @@ func (lm *levelManager) runCompactDef(id, l int, cd compactDef) (err error) {
 			len(newTables), len(cd.splits), strings.Join(from, " "), strings.Join(to, " "),
 			dur.Round(time.Millisecond))
 	}
-
 	return nil
 }
 
 // tablesToString
-func tableToString(tables []*table) []string {
+func tablesToString(tables []*table) []string {
 	var res []string
 	for _, t := range tables {
 		res = append(res, fmt.Sprintf("%05d", t.fid))
@@ -491,7 +486,7 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 	iterOpt := &utils.Options{
 		IsAsc: true,
 	}
-	// numTabes := int64(len(topTables) + len(botTables))
+	//numTables := int64(len(topTables) + len(botTables))
 	newIterator := func() []utils.Iterator {
 		// Create iterators across all the tables involved first.
 		var iters []utils.Iterator
@@ -508,9 +503,9 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 	res := make(chan *table, 3)
 	inflightBuilders := utils.NewThrottle(8 + len(cd.splits))
 	for _, kr := range cd.splits {
-		// Initiate Do here so we can register the goroutine for buildTables too.
+		// Initiate Do here so we can register the goroutines for buildTables too.
 		if err := inflightBuilders.Do(); err != nil {
-			return nil, nil, fmt.Errorf("cannot start subcompation: %+v", err)
+			return nil, nil, fmt.Errorf("cannot start subcompaction: %+v", err)
 		}
 		// 开启一个协程去处理子压缩
 		go func(kr keyRange) {
@@ -521,7 +516,7 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 		}(kr)
 	}
 
-	// mapreduce 的方式手机table的句柄
+	// mapreduce的方式收集table的句柄
 	var newTables []*table
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -536,11 +531,12 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 	err := inflightBuilders.Finish()
 	// channel 资源回收
 	close(res)
-	// 等待所有的builder刷新到磁盘
+	// 等待所有的builder刷到磁盘
 	wg.Wait()
 
 	if err == nil {
 		// 同步刷盘，保证数据一定落盘
+		err = utils.SyncDir(lm.opt.WorkDir)
 	}
 
 	if err != nil {
@@ -552,7 +548,6 @@ func (lm *levelManager) compactBuildTables(lev int, cd compactDef) ([]*table, fu
 	sort.Slice(newTables, func(i, j int) bool {
 		return utils.CompareKeys(newTables[i].ss.MaxKey(), newTables[j].ss.MaxKey()) < 0
 	})
-
 	return newTables, func() error { return decrRefs(newTables) }, nil
 }
 
@@ -566,7 +561,7 @@ func (lm *levelManager) addSplits(cd *compactDef) {
 	// In an edge case, 142 tables in bottom led to 48 splits. That's too many splits, because it
 	// then uses up a lot of memory for table builder.
 	// We should keep it so we have at max 5 splits.
-	width := int(math.Ceil(float64(len(cd.bot) / 5.0)))
+	width := int(math.Ceil(float64(len(cd.bot)) / 5.0))
 	if width < 3 {
 		width = 3
 	}
@@ -614,7 +609,6 @@ func (lm *levelManager) fillMaxLevelTables(tables []*table, cd *compactDef) bool
 		// This is a maxLevel to maxLevel compaction and we don't have any stale data.
 		return false
 	}
-
 	cd.bot = []*table{}
 	collectBotTables := func(t *table, needSz int64) {
 		totalSize := t.Size()
@@ -622,9 +616,9 @@ func (lm *levelManager) fillMaxLevelTables(tables []*table, cd *compactDef) bool
 		j := sort.Search(len(tables), func(i int) bool {
 			return utils.CompareKeys(tables[i].ss.MinKey(), t.ss.MinKey()) >= 0
 		})
-		utils.CondPanic(tables[j].fid != t.fid, errors.New("tables[j].Id() != t.Id()"))
+		utils.CondPanic(tables[j].fid != t.fid, errors.New("tables[j].ID() != t.ID()"))
 		j++
-		// collect tables until we reach the required size.
+		// Collect tables until we reach the the required size.
 		for j < len(tables) {
 			newT := tables[j]
 			totalSize += newT.Size()
@@ -637,41 +631,40 @@ func (lm *levelManager) fillMaxLevelTables(tables []*table, cd *compactDef) bool
 			j++
 		}
 	}
-
 	now := time.Now()
 	for _, t := range sortedTables {
 		if now.Sub(*t.GetCreatedAt()) < time.Hour {
 			// Just created it an hour ago. Don't pick for compaction.
 			continue
 		}
-		// If the stale data size is ledd than 10MB, it might not be worth
-		// rewriting tht table. Skip it.
+		// If the stale data size is less than 10 MB, it might not be worth
+		// rewriting the table. Skip it.
 		if t.StaleDataSize() < 10<<20 {
 			continue
 		}
+
 		cd.thisSize = t.Size()
 		cd.thisRange = getKeyRange(t)
 		// Set the next range as the same as the current range. If we don't do
-		// this, we won't be able to run more than one max level compaction.
+		// this, we won't be able to run more than one max level compactions.
 		cd.nextRange = cd.thisRange
-		// If we have already compacted this range, don't do anything
+		// If we're already compacting this range, don't do anything.
 		if lm.compactState.overlapsWith(cd.thisLevel.levelNum, cd.thisRange) {
 			continue
 		}
 
 		// Found a valid table!
-		cd.top = []*table{}
+		cd.top = []*table{t}
 
-		needFilesSz := cd.t.fileSz[cd.thisLevel.levelNum]
-		// 如果合并的sst size需要的文件储存直接终止
-		if t.Size() >= needFilesSz {
+		needFileSz := cd.t.fileSz[cd.thisLevel.levelNum]
+		// 如果合并的sst size需要的文件尺寸直接终止
+		if t.Size() >= needFileSz {
 			break
 		}
-
 		// TableSize is less than what we want. Collect more tables for compaction.
-		// If the level has muliple small tables, we collect all of them
+		// If the level has multiple small tables, we collect all of them
 		// together to form a bigger table.
-		collectBotTables(t, needFilesSz)
+		collectBotTables(t, needFileSz)
 		if !lm.compactState.compareAndAdd(thisAndNextLevelRLocked{}, *cd) {
 			cd.bot = cd.bot[:0]
 			cd.nextRange = keyRange{}
@@ -753,39 +746,38 @@ func (lm *levelManager) fillTablesL0ToL0(cd *compactDef) bool {
 	cd.nextRange = keyRange{}
 	cd.bot = nil
 
-	// TODO 这里是否会导致死锁
+	// TODO 这里是否会导致死锁？
 	utils.CondPanic(cd.thisLevel.levelNum != 0, errors.New("cd.thisLevel.levelNum != 0"))
 	utils.CondPanic(cd.nextLevel.levelNum != 0, errors.New("cd.nextLevel.levelNum != 0"))
 	lm.levels[0].RLock()
 	defer lm.levels[0].RUnlock()
 
 	lm.compactState.Lock()
-	defer lm.compactState.RUnlock()
+	defer lm.compactState.Unlock()
 
 	top := cd.thisLevel.tables
 	var out []*table
 	now := time.Now()
 	for _, t := range top {
 		if t.Size() >= 2*cd.t.fileSz[0] {
-			// 在 L0 to L0 的压缩过程中，不要对过大的sst文件压缩，这会造成性能抖动
+			// 在L0 to L0 的压缩过程中，不要对过大的sst文件压缩，这会造成性能抖动
 			continue
 		}
 		if now.Sub(*t.GetCreatedAt()) < 10*time.Second {
-			// 如果sst的创建时间不足10s，也不要回收
+			// 如果sst的创建时间不足10s 也不要回收
 			continue
 		}
-		if _, beginCompacted := lm.compactState.tables[t.fid]; beginCompacted {
-			// 如果当前的sst已经在压缩状态，也要忽略
+		// 如果当前的sst 已经在压缩状态 也应该忽略
+		if _, beingCompacted := lm.compactState.tables[t.fid]; beingCompacted {
 			continue
 		}
 		out = append(out, t)
 	}
 
 	if len(out) < 4 {
-		// 满足条件的sst小于4个，就不压缩了
+		// 满足条件的sst小于4个那就不压缩了
 		return false
 	}
-
 	cd.thisRange = infRange
 	cd.top = out
 
@@ -796,6 +788,8 @@ func (lm *levelManager) fillTablesL0ToL0(cd *compactDef) bool {
 		lm.compactState.tables[t.fid] = struct{}{}
 	}
 
+	//  l0 to l0的压缩最终都会压缩为一个文件，这大大减少了l0层文件数量，减少了读放大
+	cd.t.fileSz[0] = math.MaxUint32
 	return true
 }
 

@@ -46,16 +46,14 @@ func openDir(path string) (*os.File, error) {
 func SyncDir(dir string) error {
 	f, err := openDir(dir)
 	if err != nil {
-		return errors.Wrapf(err, "While open directory: %s.", dir)
+		return errors.Wrapf(err, "While opening directory: %s.", dir)
 	}
-
 	err = f.Sync()
-	if err != nil {
-		return errors.Wrapf(err, "While sync directory: %s.", dir)
-	}
-
 	closeErr := f.Close()
-	return errors.Wrapf(closeErr, "While close directory: %s.", dir)
+	if err != nil {
+		return errors.Wrapf(err, "While syncing directory: %s.", dir)
+	}
+	return errors.Wrapf(closeErr, "While closing directory: %s.", dir)
 }
 
 // LoadIDMap Get the id of all sst files in the current folder
