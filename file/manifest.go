@@ -16,17 +16,17 @@ import (
 	"github.com/vvvvjvvvv/jkv/utils"
 )
 
-// Manifest 维护 sst 文件元信息的文推荐
+// ManifestFile 维护 sst 文件元信息的文推荐
 // manifest 比较特殊，不能使用 mmap， 需要保证实时写入
 type ManifestFile struct {
-	opt                     *Options
-	f                       *os.File
-	lock                    sync.Mutex
-	deletionRewriteThrehold int
-	manifest                *Manifest
+	opt                      *Options
+	f                        *os.File
+	lock                     sync.Mutex
+	deletionRewriteThreshold int
+	manifest                 *Manifest
 }
 
-// Manigest jkv 元数据状态维护
+// Manifest jkv 元数据状态维护
 type Manifest struct {
 	Levels    []levelManifest
 	Tables    map[uint64]TableManifest
@@ -44,7 +44,7 @@ type levelManifest struct {
 	Tables map[uint64]struct{} // set of table id's
 }
 
-// TabelMeta sst 的一些元信息
+// TableMeta sst 的一些元信息
 type TableMeta struct {
 	ID       uint64
 	CheckSum []byte
@@ -150,7 +150,7 @@ func ReplayManifestFile(fp *os.File) (ret *Manifest, truncOffset int64, err erro
 	return build, offset, err
 }
 
-// This is not a "recoverable" error -- opening the KV store fails bacause the MANIFEST file is
+// This is not a "recoverable" error -- opening the KV store fails because the MANIFEST file is
 // just plain broken
 func applyChangeSet(build *Manifest, changeSet *pb.ManifestChangeSet) error {
 	for _, change := range changeSet.Changes {

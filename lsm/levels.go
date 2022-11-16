@@ -19,7 +19,7 @@ func (lsm *LSM) initLevelManager(opt *Options) *levelManager {
 	if err := lm.loadManifest(); err != nil {
 		panic(err)
 	}
-	lm.build()
+	_ = lm.build() // 把 sst 文件的索引加载到内存，以便db加载和访问
 	return lm
 }
 

@@ -128,6 +128,7 @@ func (lsm *LSM) Get(key []byte) (*utils.Entry, error) {
 	if entry, err = lsm.memTable.Get(key); entry != nil && entry.Value != nil {
 		return entry, err
 	}
+	// 从最新的immutables中开始查，版本问题
 	for i := len(lsm.immutables) - 1; i >= 0; i-- {
 		if entry, err = lsm.immutables[i].Get(key); entry != nil && entry.Value != nil {
 			return entry, err

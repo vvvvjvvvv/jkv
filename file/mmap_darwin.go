@@ -39,7 +39,7 @@ func OpenMmapFileUsing(fd *os.File, sz int, writable bool) (*MmapFile, error) {
 		return nil, errors.Wrapf(err, "while mmapping %s with size: %d", fd.Name(), fileSize)
 	}
 
-	if fileSize == 0 {
+	if fileSize == 0 { // sz == 0, no file created, force SyncDir
 		dir, _ := filepath.Split(filename)
 		go SyncDir(dir)
 	}

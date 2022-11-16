@@ -14,6 +14,6 @@ type Item interface {
 }
 
 type Options struct {
-	Prefix []byte
-	IsAsc  bool
+	Prefix []byte // 指定的前缀
+	IsAsc  bool   // 是否升序
 }

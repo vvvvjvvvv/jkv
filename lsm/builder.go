@@ -54,7 +54,7 @@ const headerSize = uint16(unsafe.Sizeof(header{}))
 
 // Decode decodes the header.
 func (h *header) decode(buf []byte) {
-	copy(((*[headerSize]byte)(unsafe.Pointer(h))[:]), buf[:headerSize])
+	copy((*[headerSize]byte)(unsafe.Pointer(h))[:], buf[:headerSize])
 }
 
 func (h header) encode() []byte {
@@ -63,6 +63,7 @@ func (h header) encode() []byte {
 	return b[:]
 }
 
+// add 把 kv 编码到 block 里
 func (tb *tableBuilder) add(e *utils.Entry, isStale bool) {
 	key := e.Key
 	val := utils.ValueStruct{

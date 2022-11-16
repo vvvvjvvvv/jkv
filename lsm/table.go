@@ -24,6 +24,7 @@ type table struct {
 	ref int32 // For file garbage collection. Atomic.
 }
 
+// openTable sst文件在内存中的一个句柄
 func openTable(lm *levelManager, tableName string, builder *tableBuilder) *table {
 	sstSize := int(lm.opt.SSTableMaxSz)
 	if builder != nil {
