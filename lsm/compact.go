@@ -217,6 +217,8 @@ func (lm *levelManager) pickCompactLevels() (prios []compactionPriority) {
 		// score的计算是 扣除正在合并的表后的尺寸与目标sz的比值
 		addPriority(i, float64(sz)/float64(t.targetSz[i]))
 	}
+	// l0层是数量，非l0层是size
+
 	utils.CondPanic(len(prios) != len(lm.levels), errors.New("[pickCompactLegels] len(prios) != len(lm.levels)"))
 
 	// 调整得分
@@ -719,7 +721,7 @@ func (lm *levelManager) fillTablesL0ToLbase(cd *compactDef) bool {
 		}
 	}
 
-	// 获取目标range list 的全局 range 对象
+	// 获取源(l0)range list 的全局 range 对象
 	cd.thisRange = getKeyRange(out...)
 	cd.top = out
 
@@ -818,6 +820,7 @@ func getKeyRange(tables ...*table) keyRange {
 	}
 }
 
+// l0 层是通过fid排序的
 func iteratorsReversed(th []*table, opt *utils.Options) []utils.Iterator {
 	out := make([]utils.Iterator, 0, len(th))
 	for i := len(th) - 1; i >= 0; i-- {
@@ -891,7 +894,7 @@ func (lm *levelManager) subcompact(it utils.Iterator, kr keyRange, cd compactDef
 	if len(kr.left) > 0 {
 		it.Seek(kr.left)
 	} else {
-		//
+		// 迭代器的初始化，移到最前面的部分
 		it.Rewind()
 	}
 	for it.Valid() {
@@ -951,7 +954,7 @@ func IsDeletedOrExpired(e *utils.Entry) bool {
 type compactStatus struct {
 	sync.RWMutex
 	levels []*levelCompactStatus
-	tables map[uint64]struct{}
+	tables map[uint64]struct{}	// 记录处于压缩状态的tables
 }
 
 func (lsm *LSM) newCompactStatus() *compactStatus {
@@ -1023,6 +1026,7 @@ func (cs *compactStatus) compareAndAdd(_ thisAndNextLevelRLocked, cd compactDef)
 	thisLevel := cs.levels[cd.thisLevel.levelNum]
 	nextLevel := cs.levels[cd.nextLevel.levelNum]
 
+	// 基于区间比较，而不是tables
 	if thisLevel.overlapsWith(cd.thisRange) {
 		return false
 	}

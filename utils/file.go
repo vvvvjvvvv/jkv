@@ -40,6 +40,10 @@ func openDir(path string) (*os.File, error) {
 	return os.Open(path)
 }
 
+func VlogFilePath(dirPath string, fid uint32) string {
+	return fmt.Sprintf("%s%s%05d.vlog", dirPath, string(os.PathSeparator), fid)
+}
+
 // SyncDir When you create or delete a file, you want to ensure the directory entry for the file is synced
 // in order to guarantee the file is visible (if the system crashes). (See the man page for fsync,
 // or see https://github.com/coreos/etcd/issues/6368 for an example.)

@@ -211,7 +211,7 @@ func TestCompact(t *testing.T) {
 func baseTest(t *testing.T, lsm *LSM, n int) {
 	// 用来跟踪调试的
 	e := &utils.Entry{
-		Key:       []byte("CRTS😁</wwMrGSBtL12345678"),
+		Key:       []byte("CRTS😁jvvvvMrGSBtL12345678"),
 		Value:     []byte("我草了"),
 		ExpiresAt: 123,
 	}
